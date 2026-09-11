@@ -779,14 +779,20 @@ def _window_residuals_expected(
     feature_columns: Tuple[str, ...],
     add_intercept: bool = False,
 ):
-    y = df["y"].to_numpy()
-    x = df.select(feature_columns).to_numpy()
+    regression_columns = ["y", *feature_columns]
+    is_valid = df.select(
+        pl.all_horizontal(pl.col(regression_columns).is_not_null()).alias("_is_valid")
+    )["_is_valid"].to_list()
+    y = np.array(df["y"].to_list(), dtype=float)
+    x = np.column_stack([np.array(df[column].to_list(), dtype=float) for column in feature_columns])
     if add_intercept:
         x = np.column_stack([x, np.ones(len(df))])
 
     expected = [None] * len(df)
     for end in range(window_size - 1, len(df)):
         start = end + 1 - window_size
+        if not all(is_valid[start : end + 1]):
+            continue
         x_window = x[start : end + 1]
         y_window = y[start : end + 1]
         beta = np.linalg.lstsq(x_window, y_window, rcond=None)[0]
@@ -907,6 +913,52 @@ def test_rolling_window_residuals_over_groups():
         )
 
 
+def test_rolling_window_residuals_drop_window_nulls():
+    window_size = 4
+    df = pl.DataFrame(
+        {
+            "group": ["a"] * 7 + ["b"] * 6,
+            "y": [1.0, 2.0, None, 4.2, 3.6, 5.0, 6.1, 10.0, 8.5, 11.2, 13.4, 12.1, 15.8],
+            "x1": [0.0, 1.0, 2.0, 4.0, 7.0, 11.0, 16.0, -3.0, -1.0, 0.0, 2.0, 5.0, 9.0],
+            "x2": [1.0, 0.5, 1.5, 2.5, 4.0, 5.5, 7.0, 3.0, 2.0, 4.5, 5.0, 7.0, 8.5],
+        }
+    )
+
+    out = df.with_columns(
+        pl.col("y")
+        .least_squares.rolling_ols(
+            "x1",
+            "x2",
+            add_intercept=True,
+            window_size=window_size,
+            min_periods=window_size,
+            null_policy="drop_window",
+            mode="window_residuals",
+        )
+        .over("group")
+        .alias("window_residuals")
+    )
+
+    assert out["window_residuals"].dtype == pl.List(pl.Float64)
+    assert [
+        None if residuals is None else len(residuals)
+        for residuals in out["window_residuals"].to_list()
+    ] == [None, None, None, None, None, None, 4, None, None, None, 4, 4, 4]
+
+    for group in ("a", "b"):
+        group_df = df.filter(pl.col("group") == group)
+        group_out = out.filter(pl.col("group") == group)
+        expected = _window_residuals_expected(
+            group_df,
+            window_size=window_size,
+            feature_columns=("x1", "x2"),
+            add_intercept=True,
+        )
+        _assert_window_residuals_match(
+            group_out["window_residuals"].to_list(), expected, window_size
+        )
+
+
 def test_rolling_ols_existing_modes_unchanged():
     window_size = 4
     df = pl.DataFrame(
@@ -992,13 +1044,16 @@ def test_rolling_window_residuals_rejects_unsupported_options():
             )
         )
 
-    with pytest.raises(NotImplementedError, match="null_policy='ignore'"):
+    with pytest.raises(
+        NotImplementedError,
+        match="null_policy='ignore' or null_policy='drop_window'",
+    ):
         df.select(
             pl.col("y").least_squares.rolling_ols(
                 "x",
                 window_size=4,
                 min_periods=4,
-                null_policy="drop_window",
+                null_policy="drop",
                 mode="window_residuals",
             )
         )

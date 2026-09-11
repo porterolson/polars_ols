@@ -713,11 +713,11 @@ fn rolling_least_squares_window_residuals(
     kwargs: RollingKwargs,
 ) -> PolarsResult<Series> {
     let null_policy = kwargs.get_null_policy();
-    if null_policy != NullPolicy::Ignore {
+    if !matches!(null_policy, NullPolicy::Ignore | NullPolicy::DropWindow) {
         return Err(polars_err!(
             InvalidOperation:
-            "mode='window_residuals' currently supports only null_policy='ignore'; \
-             drop or fill missing values upstream before calling rolling_ols"
+            "mode='window_residuals' currently supports only null_policy='ignore' \
+             or null_policy='drop_window'"
         ));
     }
 
@@ -729,18 +729,24 @@ fn rolling_least_squares_window_residuals(
         ));
     }
 
-    if inputs.iter().any(|s| s.null_count() > 0) {
+    if null_policy == NullPolicy::Ignore && inputs.iter().any(|s| s.null_count() > 0) {
         return Err(polars_err!(
             InvalidOperation:
             "mode='window_residuals' with null_policy='ignore' requires inputs with no nulls; \
-             drop or fill missing values upstream before calling rolling_ols"
+             use null_policy='drop_window' to return null for incomplete windows"
         ));
     }
 
+    let is_valid = if null_policy == NullPolicy::DropWindow {
+        let is_valid_mask = compute_is_valid_mask(inputs, &null_policy, None);
+        convert_is_valid_mask_to_vec(&is_valid_mask, inputs[0].len())
+    } else {
+        vec![true; inputs[0].len()]
+    };
     let (y, x) = convert_polars_to_ndarray(inputs, &NullPolicy::Zero, None);
     let n = y.len();
     let window_size = kwargs.window_size;
-    let is_valid = vec![true; n];
+    let solver_is_valid = vec![true; n];
     let coefficients = solve_rolling_ols(
         &y,
         &x,
@@ -748,8 +754,8 @@ fn rolling_least_squares_window_residuals(
         kwargs.min_periods,
         kwargs.use_woodbury,
         kwargs.alpha,
-        &is_valid,
-        null_policy,
+        &solver_is_valid,
+        NullPolicy::Ignore,
     );
 
     if n < window_size {
@@ -775,6 +781,11 @@ fn rolling_least_squares_window_residuals(
         }
 
         let window_start = i + 1 - window_size;
+        if !is_valid[window_start..i + 1].iter().all(|valid| *valid) {
+            residual_windows.push(None);
+            continue;
+        }
+
         let x_window = x.slice(s![window_start..i + 1, ..]);
         let y_window = y.slice(s![window_start..i + 1]);
         let predictions = x_window.dot(&beta);

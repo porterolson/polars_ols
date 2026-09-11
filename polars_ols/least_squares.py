@@ -404,10 +404,10 @@ def compute_rolling_least_squares(
             raise NotImplementedError(
                 "mode='window_residuals' currently supports only sample_weights=None."
             )
-        if rolling_kwargs.null_policy != "ignore":
+        if rolling_kwargs.null_policy not in {"ignore", "drop_window"}:
             raise NotImplementedError(
-                "mode='window_residuals' currently supports only null_policy='ignore'. "
-                "Drop or fill missing values upstream before calling rolling_ols."
+                "mode='window_residuals' currently supports only null_policy='ignore' "
+                "or null_policy='drop_window'."
             )
         if rolling_kwargs.min_periods != rolling_kwargs.window_size:
             raise NotImplementedError(
