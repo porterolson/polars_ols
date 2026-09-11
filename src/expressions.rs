@@ -768,6 +768,7 @@ fn rolling_least_squares_window_residuals(
     }
 
     let mut residual_windows: Vec<Option<Series>> = Vec::with_capacity(n);
+    let mut has_valid_window = false;
     for i in 0..n {
         if i + 1 < window_size {
             residual_windows.push(None);
@@ -790,7 +791,17 @@ fn rolling_least_squares_window_residuals(
         let y_window = y.slice(s![window_start..i + 1]);
         let predictions = x_window.dot(&beta);
         let residuals = (&y_window - &predictions).to_vec();
+        has_valid_window = true;
         residual_windows.push(Some(Series::from_vec("", residuals)));
+    }
+
+    if !has_valid_window {
+        return Ok(ListChunked::full_null_with_dtype(
+            inputs[0].name().into(),
+            n,
+            &DataType::Float64,
+        )
+        .into_series());
     }
 
     let series = residual_windows

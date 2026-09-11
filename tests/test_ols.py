@@ -959,6 +959,40 @@ def test_rolling_window_residuals_drop_window_nulls():
         )
 
 
+def test_rolling_window_residuals_drop_window_all_null_group_dtype():
+    df = pl.DataFrame(
+        {
+            "group": ["a"] * 4 + ["b"] * 4,
+            "y": [None, 2.0, 3.0, 4.0, 10.0, 8.5, 11.2, 13.4],
+            "x1": [0.0, 1.0, 2.0, 4.0, -3.0, -1.0, 0.0, 2.0],
+            "x2": [1.0, 0.5, 1.5, 2.5, 3.0, 2.0, 4.5, 5.0],
+        }
+    )
+
+    out = df.with_columns(
+        pl.col("y")
+        .least_squares.rolling_ols(
+            "x1",
+            "x2",
+            add_intercept=True,
+            window_size=4,
+            min_periods=4,
+            null_policy="drop_window",
+            mode="window_residuals",
+        )
+        .over("group")
+        .alias("window_residuals")
+    )
+
+    assert out["window_residuals"].dtype == pl.List(pl.Float64)
+    assert out.filter(pl.col("group") == "a")["window_residuals"].to_list() == [
+        None,
+        None,
+        None,
+        None,
+    ]
+
+
 def test_rolling_ols_existing_modes_unchanged():
     window_size = 4
     df = pl.DataFrame(
