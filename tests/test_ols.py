@@ -801,7 +801,10 @@ def _window_residuals_expected(
 
 
 def _assert_window_residuals_match(actual, expected, window_size: int):
-    for index, (actual_window, expected_window) in enumerate(zip(actual, expected, strict=True)):
+    assert len(actual) == len(expected)
+    for index in range(len(actual)):
+        actual_window = actual[index]
+        expected_window = expected[index]
         if expected_window is None:
             assert actual_window is None, f"expected row {index} to be null"
         else:
